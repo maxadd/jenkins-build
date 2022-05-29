@@ -1,0 +1,33 @@
+[jenkins]
+build = "buildWithParameters"
+poll_build_result_interval_second = 10
+poll_build_result_counts = 60
+
+[[jenkins.instances]]
+name = "dev"
+url = "https://dev-jenkins.example.com"
+user = "admin"
+password = "11287fa6fd10052b5513db2ec5ed14ad9z"
+
+[jenkins.instances.jobs.job1]
+build = "buildWithParameters"
+poll_build_result_interval_second = 10
+poll_build_result_counts = 60
+
+[jenkins.instances.jobs.job1.parameters]
+app = "abc"
+system = "efg"
+
+[[jenkins.instances]]
+name = "uat"
+url = "https://uat-jenkins.example.com"
+user = "admin"
+password = "11287fa6fd10052b5513db2ec5ed14ad9z"
+
+[jenkins.instances.jobs.job3]
+build = "build"
+poll_build_result_interval_second = 10
+poll_build_result_counts = 60
+
+[file]
+path = "/tmp/x"
