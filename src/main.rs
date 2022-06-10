@@ -258,19 +258,19 @@ impl HttpClient {
         Ok(t)
     }
 
-    async fn get_job_result(&self, url: &str, job_config: _JenkinsJobConfig) -> Result<String> {
+    async fn get_job_result(&self, url: String, job_config: _JenkinsJobConfig) -> Result<String> {
         let mut i = 0;
         loop {
             if i == job_config.poll_build_result_counts {
-                return Err(anyhow!("Getting building result timeout on {:?}", url))
+                return Err(anyhow!("Getting building result timeout on {:?}", &url))
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(
                 job_config.poll_build_result_interval_second)).await;
-            let response = self.client.get(url).basic_auth(
+            let response = self.client.get(&url).basic_auth(
                 &self.jenkins.user,Some(&self.jenkins.password)).send().await.with_context(||
-                format!("Failed to get {:?}", url))?;
+                format!("Failed to get {:?}", &url))?;
             let page = response.json::<JenkinsResult>().await.with_context(
-                || format!("Failed to deserialize json on {:?}", url))?;
+                || format!("Failed to deserialize json on {:?}", &url))?;
             if let Some(result) = page.result {
                 return Ok(result)
             }
@@ -378,42 +378,42 @@ impl<'a> PrintData<'a> {
     }
 }
 
+async fn request_to_jenkins(job: _JenkinsJobConfig, clients: Arc<HashMap<&'static str,
+    HttpClient>>) -> Result<String> {
+    let client = clients.get(job.instance_name).with_context(
+        || format!("No jenkins instance named {} for job {}", job.instance_name, job.name))?;
+    let location = client.job_build(job).await?;
+    let jenkins_page = client.get_job_status::<JenkinsExecPage>(&(location + "api/json")).await?;
+    let url = jenkins_page.executable.url + "api/json";
+    client.get_job_status::<JenkinsResult>(&url).await?;
+    let result = client.get_job_result(url, job).await?;
+    Ok(result)
+}
 
-async fn exec() -> Result<String, anyhow::Error>{
+async fn exec() -> Result<()>{
     CONFIG.validate()?;
     let jenkins_clients = Arc::new(get_jenkins_clients()?);
     let jobs = get_all_jobs()?;
     let (tx, mut rx) = tokio::sync::mpsc::channel(jobs.len());
-    let mut tasks = HashMap::with_capacity(jobs.len());
     for (idx, job) in jobs.iter().enumerate() {
-        let i = job.clone();
         let tx = tx.clone();
+        let job = job.clone();
         let jenkins_clients = jenkins_clients.clone();
-        tasks.insert(i.name, tokio::spawn(async move {
-            let client = jenkins_clients.get(i.instance_name).with_context(
-                || format!("No jenkins instance named {} for job {}", i.instance_name, i.name))?;
-            let location = client.job_build(i).await?;
-            let jenkins_page = client.get_job_status::<JenkinsExecPage>(&(location + "api/json")).await?;
-            let url = jenkins_page.executable.url + "api/json";
-            client.get_job_status::<JenkinsResult>(&url).await?;
-            let result = client.get_job_result(&url, i).await?;
-            // println!("{:?} => {:?}", &i, &result);
-            tx.send((idx, i.name)).await?;
-            Ok::<String, anyhow::Error>(result)
-        }));
+        tokio::spawn(async move {
+            match request_to_jenkins(job, jenkins_clients).await {
+                Ok( name) => tx.send((idx, name)).await,
+                Err(err) => tx.send((idx, err.to_string())).await,
+            }
+        });
     }
     drop(tx);
 
     let mut p = PrintData::new(&jobs);
     p.print(0, String::new());
-    while let Some((idx, key)) = rx.recv().await {
-        match tasks.remove(&key).unwrap().await {
-            Ok(Ok(s)) => {p.print(idx, s)},
-            Ok(Err(e)) => { p.print(idx, e.to_string()) },
-            Err(e) => { p.print(idx, e.to_string()) }
-        }
+    while let Some((idx, result)) = rx.recv().await {
+        p.print(idx, result);
     }
-    Ok(String::new())
+    Ok(())
 }
 
 #[tokio::main]
